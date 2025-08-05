@@ -1,0 +1,41 @@
+# Ignore Python cache and virtual environment files
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.env
+.venv/
+venv/
+env/
+
+# Ignore Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# Ignore IDE/project files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+*.ipynb
+*.csv
+slides
+First two months
+ctkDICOM-Database
+receiver_server.py
+dicom2nifti_2.py
+inconsistencies.docx
+Remarks.docx
