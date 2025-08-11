@@ -35,7 +35,14 @@ Thumbs.db
 slides
 First two months
 ctkDICOM-Database
+
+# Python scripts
 receiver_server.py
 dicom2nifti_2.py
-inconsistencies.docx
-Remarks.docx
+psma_cleaner.py
+radgraph_cleaning.py
+
+Yazdan_files
+*.txt
+*.docx
+*.json*

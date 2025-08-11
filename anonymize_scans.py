@@ -36,7 +36,7 @@ def anonymize(folder: Path, csv_path: Path, digits=4, dry=True):
             if dry:
                 print(f"[DRY] {f.name} -> {new_name}")
             else:
-                f.rename(target)  # pathlib rename :contentReference[oaicite:0]{index=0}
+                f.rename(target)
         mapping_rows.append({"original": pfx, "anon_id": anon_id})
 
     # Write CSV

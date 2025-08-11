@@ -177,7 +177,7 @@ def convert_patient(patient_root: Path, out_dir: Path):
         str(patient_root).split("\\")[-1].split("-")[0]
     )  # e.g John_Smith_01-11-26-10 ---> John_Smith_01
     # There is only one example that goes like John_Smith and not like John_Smith_01
-    if len(p.split("_")[0]) == 2:
+    if len(p.split("_")) == 2:
         patient_name = p
         print("patient: ", patient_name)
     else:
