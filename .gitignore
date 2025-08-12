@@ -39,7 +39,6 @@ ctkDICOM-Database
 # Python scripts
 receiver_server.py
 dicom2nifti_2.py
-psma_cleaner.py
 radgraph_cleaning.py
 
 Yazdan_files
