@@ -42,6 +42,7 @@ dicom2nifti_2.py
 radgraph_cleaning.py
 
 Yazdan_files
+cache
 *.txt
 *.docx
 *.json*
