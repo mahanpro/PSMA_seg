@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 import argparse
 
-PATTERN = re.compile(r"^(?P<prefix>.+)_(?P<mod>(CT|PT))\.nii\.gz$", re.IGNORECASE)
+PATTERN = re.compile(r"^(?P<prefix>.+)_(?P<mod>(CT|PT|MASK))\.nii\.gz$", re.IGNORECASE)
 
 
 def collect_files(folder: Path):

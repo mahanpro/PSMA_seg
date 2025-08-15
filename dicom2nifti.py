@@ -60,6 +60,46 @@ def log_image(
         )
 
 
+SEGS_LOG_PATH = OUTPUT_DIR / "segments_log.csv"
+if not SEGS_LOG_PATH.exists():
+    with SEGS_LOG_PATH.open("w", newline="") as f:
+        csv.writer(f).writerow(
+            [
+                "timestamp",
+                "patient",
+                "seg_path",
+                "num_components",
+                "component_names",
+                "component_nonzero_voxels",
+            ]
+        )
+
+
+def _seg_names(seg_img: sitk.Image):
+    names = []
+    C = seg_img.GetNumberOfComponentsPerPixel()
+    for i in range(C):
+        key = f"Segment{i}_Name"
+        names.append(
+            seg_img.GetMetaData(key) if seg_img.HasMetaDataKey(key) else f"seg_{i+1}"
+        )
+    return names
+
+
+def _log_segments(patient: str, seg_path: Path, C: int, names, counts):
+    with SEGS_LOG_PATH.open("a", newline="") as f:
+        csv.writer(f).writerow(
+            [
+                datetime.datetime.now().isoformat(timespec="seconds"),
+                patient,
+                str(seg_path),
+                C,
+                json.dumps(names),
+                json.dumps(counts),
+            ]
+        )
+
+
 ########################################################################
 # ----------  helpers --------------------------------------------------
 ########################################################################
@@ -99,15 +139,37 @@ def convert_mask(seg_path: Path, pet_iso: sitk.Image, out_dir: Path, patient_nam
     """
     Turn a .seg.nrrd into a 0/1 mask aligned with the PET grid.
     """
-    # --- read and binarise --------------------------------------------------
-    seg_img = sitk.ReadImage(str(seg_path))  # keeps geometry
-    bin_arr = (sitk.GetArrayFromImage(seg_img) > 0).astype(np.uint8)
-    bin_img = sitk.GetImageFromArray(bin_arr)
-    bin_img.CopyInformation(seg_img)  # same physical frame
+    seg_img = sitk.ReadImage(str(seg_path))  # preserves geometry
+    C = seg_img.GetNumberOfComponentsPerPixel()
+
+    # Collect per-component masks (in SEG space) for logging and union
+    masks = []
+    if C > 1:
+        for i in range(C):
+            m = sitk.Cast(
+                sitk.VectorIndexSelectionCast(seg_img, i, sitk.sitkUInt8) > 0,
+                sitk.sitkUInt8,
+            )
+            masks.append(m)
+    else:
+        masks = [sitk.Cast(seg_img > 0, sitk.sitkUInt8)]
+
+    # Log component metadata (names + voxel counts)
+    names = _seg_names(seg_img) if C > 1 else ["seg_1"]
+    counts = []
+    for m in masks:
+        # Fast count without full numpy copy:
+        counts.append(int(sitk.GetArrayViewFromImage(m).sum()))
+    _log_segments(patient_name, seg_path, C, names, counts)
+
+    # Union in SEG space
+    union = masks[0]
+    for m in masks[1:]:
+        union = sitk.Or(union, m)
 
     # --- resample onto PET grid --------------------------------------------
     mask_on_pet = sitk.Resample(
-        bin_img,
+        union,
         pet_iso,  # reference = PET SUV grid
         sitk.Transform(),  # identity (frames already match)
         sitk.sitkNearestNeighbor,  # <-- keep labels crisp
@@ -119,7 +181,7 @@ def convert_mask(seg_path: Path, pet_iso: sitk.Image, out_dir: Path, patient_nam
     sitk.WriteImage(
         mask_on_pet, str(out_path), imageIO="NiftiImageIO", useCompression=True
     )
-    log_image(patient_name, "MASK", bin_img, mask_on_pet, out_path)
+    log_image(patient_name, "MASK", union, mask_on_pet, out_path)
     print("✓ MASK →", out_path)
 
 
