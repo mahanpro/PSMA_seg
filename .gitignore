@@ -40,9 +40,17 @@ ctkDICOM-Database
 receiver_server.py
 dicom2nifti_2.py
 radgraph_cleaning.py
+train.py
+meow.py
+
 
 Yazdan_files
 cache
+cache2
+cache3
+cache_radgraph
+radgraph_embed_old.py
 *.txt
 *.docx
+*.xlsx
 *.json*

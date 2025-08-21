@@ -6,146 +6,200 @@ python radgraph_embed.py --in_clean_jsonl cache/text/clean_reports.jsonl \
 """
 
 # coding: utf-8
-
-import argparse
-import json
+import argparse, json, math, re
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+# ---- Negation handling ----
+NEGATORS_ONE = {"no", "without", "absent", "negative"}
+NEGATORS_TWO = {("absence", "of")}
+
+# ---- SUVmax extraction ----
+SUVMAX_CLAUSE = re.compile(
+    r"(?i)\bSUV\s*max\b(?:\s*[:=])?\s*(?:(?:up\s*to|upto)\s*)?"
+    r"(?:\d+(?:\s*\.\s*\d+)?|[<>]\s*\d+(?:\s*\.\s*\d+)?)"
+    r"(?:\s*(?:and|,)\s*(?:[<>]?\s*\d+(?:\s*\.\s*\d+)?))*"
+)
+NUM_F = re.compile(r"[<>]?\s*\d+(?:\s*\.\s*\d+)?")
 
 
-def embed_one(
-    report_text: str, hf_id: str, device: Optional[str], max_length: int
-) -> Dict[str, Any]:
+def extract_suv_values(text: str) -> List[float]:
+    vals: List[float] = []
+    for m in SUVMAX_CLAUSE.finditer(text):
+        clause = m.group(0)
+        # local numeric repairs
+        clause = re.sub(r"(\d)\s*\.\s*(\d)", r"\1.\2", clause)  # "7 . 8" -> "7.8"
+        clause = re.sub(
+            r"=\s*\d+\s+(\d+\.\d+)", r"= \1", clause
+        )  # "= 7 78.3" -> "= 78.3"
+        for n in NUM_F.findall(clause):
+            n2 = n.replace(" ", "").replace("<", "").replace(">", "")
+            try:
+                vals.append(float(n2))
+            except Exception:
+                pass
+    return vals
+
+
+# ---- Core embedding helpers ----
+def _mean_pool_wordpieces_to_words(enc, hs):
+    """Return list of [H] tensors, one per original whitespace-split token."""
     import torch
-    from transformers import BertTokenizerFast, AutoModel
-    from radgraph import RadGraph
 
-    dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
-
-    rg = RadGraph(model_type="modern-radgraph-xl")
-    ann = rg([report_text])["0"]
-    print("ann: ", ann)
-    # Align to word-level (space split) tokens
-    space_tokens = ann["text"].split()
-
-    tok = BertTokenizerFast.from_pretrained(hf_id, trust_remote_code=True)
-    mdl = AutoModel.from_pretrained(hf_id, trust_remote_code=True).to(dev)
-    mdl.eval()
-
-    enc = tok(
-        space_tokens,
-        is_split_into_words=True,
-        return_tensors="pt",
-        truncation=True,
-        max_length=max_length,
-    )
-    # enc = {k: v.to(dev) for k, v in enc.items()}
-    enc = enc.to(dev)
-
-    with torch.no_grad():
-        hs = mdl(**enc).last_hidden_state[0]  # [T_wp, H]
-
-    print("type(hs): ", type(hs))
-    print("hs.shape: ", hs.shape)
     word_ids = enc.word_ids()
-    # ----------------------------------------------------------------------- log subwords
-    pieces = tok.convert_ids_to_tokens(enc["input_ids"][0].tolist())
-    for i, (p, wid) in enumerate(zip(pieces, word_ids)):
-        src = None if wid is None else space_tokens[wid]
-        print(f"{i:3d}  {p:15s}  word_id={str(wid):>3s}  word={src}")
-    print("len(pieces): ", len(pieces))
-    print("len(word_ids): ", len(word_ids))
-    print("hs.shape[0]: ", hs.shape[0])
-    # -----------------------------------------------------------------------
-    print("type(word_ids): ", type(word_ids))
-    print("word_ids: ", word_ids)
-    valid_wids = [w for w in word_ids if w is not None]
-    W = (max(valid_wids) + 1) if valid_wids else 0
-
-    # Mean-pool wordpieces → words
-    H = hs.shape[-1]  # H = dimension of each vector embedding
-    word_vecs = []
+    valid = [w for w in word_ids if w is not None]
+    W = (max(valid) + 1) if valid else 0
+    H = hs.shape[-1]
+    word_vecs: List[torch.Tensor] = []
     for i in range(W):
         idxs = [j for j, w in enumerate(word_ids) if w == i]
         if idxs:
             word_vecs.append(hs[idxs].mean(0))
         else:
             word_vecs.append(hs.new_zeros(H))
+    return word_vecs  # len=W, each [H]
 
-    # print("word_vecs[0].shape: ", word_vecs[0].shape) # 768 = hs.shape[-1]
-    print("len(word_vecs): ", len(word_vecs))
-    # Aggregate entity spans over word indices
+
+def _widen_for_negation(space_tokens: List[str], i0: int, i1: int) -> Tuple[int, int]:
+    """Include immediate negators to the left of the entity span."""
+    if i0 <= 0:
+        return i0, i1
+    t0 = space_tokens[i0 - 1].lower()
+    if t0 in NEGATORS_ONE:
+        i0 = i0 - 1
+        # also include bigram 'absence of' if present even further left
+        if i0 >= 2:
+            if (
+                space_tokens[i0 - 2].lower(),
+                space_tokens[i0 - 1].lower(),
+            ) in NEGATORS_TWO:
+                i0 = i0 - 2
+    elif i0 >= 2 and (space_tokens[i0 - 2].lower(), t0) in NEGATORS_TWO:
+        i0 = i0 - 2
+    return i0, i1
+
+
+def embed_one(report_text: str, hf_id: str, device: Optional[str]) -> Dict[str, Any]:
+    import torch
+    from transformers import BertTokenizerFast, AutoModel
+    from radgraph import RadGraph
+
+    dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
+
+    # 1) RadGraph annotations
+    rg = RadGraph(model="modern-radgraph-xl")
+    ann = rg([report_text])["0"]  # string key "0"
+
+    space_tokens = ann["text"].split()
+
+    # 2) HF encoder for embeddings (mean-pooled to whitespace tokens)
+    tok = BertTokenizerFast.from_pretrained(hf_id, trust_remote_code=True)
+    mdl = AutoModel.from_pretrained(hf_id, trust_remote_code=True).to(dev).eval()
+
+    enc = tok(
+        space_tokens,
+        is_split_into_words=True,
+        return_tensors="pt",
+        truncation=True,
+        max_length=512,
+    ).to(dev)
+    with torch.no_grad():
+        hs = mdl(**enc).last_hidden_state[0]  # [Twp, H]
+    word_vecs = _mean_pool_wordpieces_to_words(enc, hs)
+    H = hs.shape[-1]
+    W = len(word_vecs)
+
+    # 3) Build entity vectors with negation-aware span widening
     entity_vecs: Dict[str, Any] = {}
     entity_meta: Dict[str, Any] = {}
-    for eid, entity in ann["entities"].items():
+
+    for eid, entity in ann.get("entities", {}).items():
         i0 = int(entity.get("start_ix", 0))
         i1 = int(entity.get("end_ix", i0))
-        if W == 0 or i1 < i0:
+        label = str(entity.get("label", "")).lower()
+
+        if (
+            ("definitely absent" in label)
+            or ("uncertain" in label)
+            or ("negative" in label)
+        ):
+            i0, i1 = _widen_for_negation(space_tokens, i0, i1)
+
+        # clamp and pool
+        if W == 0:
             vec = hs.new_zeros(H)
         else:
-            i0 = max(0, i0)
-            i1 = min(W - 1, i1)
-            vec = (
-                (0.5 * (word_vecs[i0] + word_vecs[i1]))
-                if i1 == i0
-                else (sum(word_vecs[i0 : i1 + 1]) / (i1 - i0 + 1))
-            )
-        # print("vec.shape: ", vec.shape) # 768 = hs.shape[-1]
+            i0c = max(0, min(W - 1, i0))
+            i1c = max(0, min(W - 1, i1))
+            lo, hi = (i0c, i1c) if i0c <= i1c else (i1c, i0c)
+            vec = sum(word_vecs[lo : hi + 1]) / max(1, (hi - lo + 1))
+
+        # reconstruct tokens over widened span for readability
+        toks = (
+            " ".join(space_tokens[max(0, i0) : min(W - 1, i1) + 1])
+            if W > 0
+            else str(entity.get("tokens"))
+        )
+
         entity_vecs[eid] = vec
         entity_meta[eid] = {
-            "tokens": entity.get("tokens"),
+            "tokens": toks,
             "label": entity.get("label"),
             "start_ix": int(entity.get("start_ix", 0)),
             "end_ix": int(entity.get("end_ix", 0)),
             "relations": entity.get("relations", []),
         }
 
-    # Stack to [N,H] in numeric-eid order if possible
-    def _num_key(k: str):
-        return (0, int(k)) if k.isdigit() else (1, k)
+    # 4) Stack embeddings and sort eids by original start_ix for determinism
+    def start_ix_of(k: str) -> int:
+        try:
+            return int(entity_meta[k].get("start_ix", 0))
+        except Exception:
+            return 0
 
-    eids_sorted = sorted(entity_vecs.keys(), key=_num_key)
+    eids_sorted = sorted(entity_vecs.keys(), key=start_ix_of)
+
     E = (
         torch.stack([entity_vecs[k] for k in eids_sorted])
         if eids_sorted
-        else torch.empty(0, H)
+        else torch.empty(0, H, device=hs.device)
     )
+
+    # 5) Global SUVmax values (no per-section association)
+    suv_all = extract_suv_values(report_text)
 
     return {
         "hidden_dim": int(H),
+        "num_entities": int(E.shape[0]),
         "entity_meta": entity_meta,
         "eids_sorted": eids_sorted,
-        "embeddings": E,  # [N,H] tensor
+        "embeddings": E,  # [N, H] torch tensor
+        "suvmax_all": suv_all,  # list[float]
         "rg_model": "modern-radgraph-xl",
         "hf_id": hf_id,
-        "num_entities": int(E.shape[0]),
     }
 
 
 def main():
-    ap = argparse.ArgumentParser(description="RadGraph-XL + HF entity embeddings")
+    ap = argparse.ArgumentParser(description="RadGraph + HF embeddings (pruned)")
     ap.add_argument(
         "--in_clean_jsonl",
         type=str,
         required=True,
-        help="clean_reports.jsonl ({id, clean, ...})",
+        help="clean_reports.jsonl ({ID, clean})",
     )
     ap.add_argument(
         "--out_dir",
         type=str,
         default="cache/text",
-        help="Output directory for JSON/PT artifacts + index.jsonl",
+        help="Output dir for {ID}.json, {ID}_entities.pt, and index.jsonl",
     )
     ap.add_argument(
-        "--hf_id",
-        type=str,
-        default="microsoft/BiomedVLP-CXR-BERT-specialized",
-        help="HF encoder id used with BertTokenizerFast",
+        "--hf_id", type=str, default="microsoft/BiomedVLP-CXR-BERT-specialized"
     )
     ap.add_argument(
         "--device", type=str, default=None, help="cuda / cpu (default: auto)"
     )
-    ap.add_argument("--max_length", type=int, default=512)
     args = ap.parse_args()
 
     inp = Path(args.in_clean_jsonl)
@@ -153,9 +207,9 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     index_path = out_dir / "index.jsonl"
 
-    n = 0
     import torch
 
+    n = 0
     with open(inp, "r", encoding="utf-8") as fin, open(
         index_path, "w", encoding="utf-8"
     ) as findex:
@@ -163,22 +217,19 @@ def main():
             if not line.strip():
                 continue
             row = json.loads(line)
-            rid = row["ID"]
-            text = row.get("clean") or row.get("raw") or ""
-            if not text.strip():
-                # still write an empty artifact set
-                meta_path = out_dir / f"{rid}.json"
-                torch_path = out_dir / f"{rid}_entities.pt"
+            rid = row.get("ID") or row.get("id") or row.get("Id")
+            text = (
+                row.get("clean") or row.get("Description") or row.get("raw") or ""
+            ).strip()
+
+            meta_path = out_dir / f"{rid}.json"
+            torch_path = out_dir / f"{rid}_entities.pt"
+
+            if not rid or not text:
                 json.dump(
-                    {
-                        "ID": rid,
-                        "entity_meta": {},
-                        "hf_id": args.hf_id,
-                        "rg_model": "modern-radgraph-xl",
-                        "num_entities": 0,
-                        "hidden_dim": 0,
-                    },
+                    {"id": rid, "num_entities": 0, "hidden_dim": 0, "suvmax_all": []},
                     open(meta_path, "w", encoding="utf-8"),
+                    ensure_ascii=False,
                 )
                 torch.save({"eids": [], "embeddings": torch.empty(0, 0)}, torch_path)
                 findex.write(
@@ -195,25 +246,22 @@ def main():
                 )
                 continue
 
-            pack = embed_one(
-                text, hf_id=args.hf_id, device=args.device, max_length=args.max_length
-            )
+            pack = embed_one(text, hf_id=args.hf_id, device=args.device)
 
+            # write JSON meta
             meta = {
                 "id": rid,
                 "hf_id": pack["hf_id"],
                 "rg_model": pack["rg_model"],
                 "num_entities": pack["num_entities"],
                 "hidden_dim": pack["hidden_dim"],
-                "entity_meta": pack["entity_meta"],  # lightweight; no raw text
+                "entity_meta": pack["entity_meta"],
+                "suvmax_all": pack["suvmax_all"],
             }
-
-            meta_path = out_dir / f"{rid}.json"
-            torch_path = out_dir / f"{rid}_entities.pt"
-
             with open(meta_path, "w", encoding="utf-8") as fjson:
                 json.dump(meta, fjson, ensure_ascii=False)
 
+            # write embeddings tensor
             torch.save(
                 {"eids": pack["eids_sorted"], "embeddings": pack["embeddings"]},
                 torch_path,
