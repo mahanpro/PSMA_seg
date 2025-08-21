@@ -87,7 +87,7 @@ def embed_one(report_text: str, hf_id: str, device: Optional[str]) -> Dict[str, 
     dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
     # 1) RadGraph annotations
-    rg = RadGraph(model="modern-radgraph-xl")
+    rg = RadGraph(model_type="radgraph-xl")
     ann = rg([report_text])["0"]  # string key "0"
 
     space_tokens = ann["text"].split()
