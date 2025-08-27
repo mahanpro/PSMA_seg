@@ -38,6 +38,7 @@ TYPO_MAP = {
     "schomrl": "schmorl",
     "endlates": "endplates",
     "lesin": "lesion",
+    "leion": "lesion",
     "bronchestatic": "bronchiectatic",
     "midly": "mildly",
     "extenstion": "extension",
@@ -184,6 +185,14 @@ def normalize_text(s: str) -> str:
     s = re.sub(r"\bprominanlty\b", "prominently", s, flags=re.I)
     s = re.sub(r"\bprominant(?:ly)?\b", "prominent", s, flags=re.I)
     s = re.sub(r"\bprominately\b", "prominently", s, flags=re.I)
+
+    # 10) Remove stray punctuation after 'SUVmax = <number>' (keep any closing bracket)
+    #     e.g. "SUVmax = 10.5." or "(SUVmax = 10.5)." -> "SUVmax = 10.5" / "(SUVmax = 10.5)"
+    s = re.sub(
+        r"(?i)(SUV\s*max|SUVmax)\s*=\s*([<>]?\d+(?:\.\d+)?)(\s*[\)\]\}])?\s*[.,;](?!\d)",
+        r"SUVmax = \2\3",
+        s,
+    )
     return s.strip()
 
 
@@ -202,16 +211,16 @@ def split_reports_from_blob(blob: str) -> List[str]:
 
 SEC_PATTERNS = {
     "Prostatic fossa": re.compile(
-        r"(?is)Prostatic fossa:\s*(.*?)(?=Lymph nodes:|Skeleton:|Viscera:|\Z)"
+        r"(?is)Prostatic fossa:\s*(.*?)(?=\n\s*\n|Lymph nodes:|Skeleton:|Viscera:|\Z)"
     ),
     "Lymph nodes": re.compile(
-        r"(?is)Lymph nodes:\s*(.*?)(?=Prostatic fossa:|Skeleton:|Viscera:|\Z)"
+        r"(?is)Lymph nodes:\s*(.*?)(?=\n\s*\n|Prostatic fossa:|Skeleton:|Viscera:|\Z)"
     ),
     "Skeleton": re.compile(
-        r"(?is)Skeleton:\s*(.*?)(?=Prostatic fossa:|Lymph nodes:|Viscera:|\Z)"
+        r"(?is)Skeleton:\s*(.*?)(?=\n\s*\n|Prostatic fossa:|Lymph nodes:|Viscera:|\Z)"
     ),
     "Viscera": re.compile(
-        r"(?is)Viscera:\s*(.*?)(?=Prostatic fossa:|Lymph nodes:|Skeleton:|\Z)"
+        r"(?is)Viscera:\s*(.*?)(?=\n\s*\n|Prostatic fossa:|Lymph nodes:|Skeleton:|\Z)"
     ),
 }
 
