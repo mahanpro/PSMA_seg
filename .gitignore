@@ -43,7 +43,6 @@ radgraph_cleaning.py
 train.py
 meow.py
 test.py
-psma_models
 
 Yazdan_files
 cache
@@ -51,6 +50,7 @@ cache2
 cache3
 cache_gpt
 cache_radgraph
+cache_msraw
 radgraph_embed_old.py
 *.txt
 *.docx
