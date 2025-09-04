@@ -10,7 +10,7 @@ class CrossAttention3D(nn.Module):
     Text:   B x L x Ct (variable L, padded) -> projected to K,V with dim Cq
     """
 
-    def __init__(self, c_img: int, c_txt: int, nhead: int = 4, dropout: float = 0.0):
+    def __init__(self, c_img: int, c_txt: int, nhead: int = 4, dropout: float = 0.2):
         super().__init__()
         self.q_proj = nn.Conv3d(c_img, c_img, kernel_size=1, bias=False)
         self.k_proj = nn.Linear(c_txt, c_img, bias=False)

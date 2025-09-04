@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Usage:
 python gpt_embed.py \

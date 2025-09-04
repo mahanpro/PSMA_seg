@@ -16,6 +16,11 @@ from monai.transforms.croppad.dictionary import CropForegroundd
 from monai.transforms.utility.dictionary import ConcatItemsd, DeleteItemsd
 
 from monai.transforms.spatial.dictionary import Rand3DElasticd
+from monai.transforms.croppad.dictionary import (
+    RandCropByPosNegLabeld,
+    RandSpatialCropd,
+    ResizeWithPadOrCropd,
+)
 from monai.transforms.intensity.dictionary import (
     RandAdjustContrastd,
     RandGaussianNoised,
@@ -29,7 +34,7 @@ def make_transforms(
     train: bool,
     include_mask: bool = True,
     force_orient: bool = False,
-    pet_clip: float = 20.0,
+    pet_clip: float = 35.0,
     patch: int | None = None,  # <- optional training patch (see below)
 ):
     keys = ["CT", "PT"] + (["GT"] if include_mask else [])
@@ -58,7 +63,9 @@ def make_transforms(
         LoadImaged(keys=keys, image_only=False),
         EnsureChannelFirstd(keys=keys),
         # drop -1000 HU padding (uses CT as body mask, deterministic)
-        CropForegroundd(keys=keys, source_key="CT", select_fn=lambda x: x > -900),
+        CropForegroundd(
+            keys=keys, source_key="CT", select_fn=lambda x: x > -900, margin=8
+        ),
     ]
     if force_orient:
         ops.append(Orientationd(keys=keys, axcodes="RAS"))
@@ -78,18 +85,39 @@ def make_transforms(
         ),
     ]
 
-    # (optional) train-time patch crop (see next section)
+    # train-time patch crop (prefer positive-biased sampling if GT present)
     if train and patch:
-        from monai.transforms.croppad.dictionary import RandSpatialCropd
-
-        ops += [
-            RandSpatialCropd(
-                keys=keys,
-                roi_size=(patch, patch, patch),
-                random_center=True,
-                random_size=False,
-            )
-        ]
+        if include_mask:
+            ops += [
+                RandCropByPosNegLabeld(
+                    keys=keys,
+                    label_key="GT",
+                    spatial_size=(patch, patch, patch),
+                    pos=3,
+                    neg=1,
+                    num_samples=2,  # two patches per image improves stability with bs=1
+                    image_key="CT",  # either CT or PT is fine for spacing
+                    image_threshold=-900,  # ignore air
+                    allow_smaller=True,
+                ),
+                ResizeWithPadOrCropd(
+                    keys=keys,
+                    spatial_size=(patch, patch, patch),
+                    mode="constant",
+                ),
+            ]
+        else:
+            ops += [  # fallback if GT missing for some ablations
+                RandSpatialCropd(
+                    keys=keys,
+                    roi_size=(patch, patch, patch),
+                    random_center=True,
+                    random_size=False,
+                ),
+                ResizeWithPadOrCropd(
+                    keys=keys, spatial_size=(patch, patch, patch), mode="constant"
+                ),
+            ]
 
     # now do the augs while CT/PT still exist
     ops += aug
@@ -133,21 +161,24 @@ class PSMAJSONDataset(Dataset):
         tail = self.max_tokens - head
         return torch.cat([tok[:head], tok[-tail:]], dim=0)
 
-    def __getitem__(self, idx: int) -> Dict[str, Any]:
-        item = super().__getitem__(idx)  # contains CTPT (+GT)
+    def __getitem__(self, idx):
+        out = super().__getitem__(idx)  # dict OR list[dict]
         rid = str(self.data[idx]["ID"])
-        item["ID"] = rid
 
-        if self.text_modality != "image":
-            tokens, mask = load_tokens_for_id(self.text_modality, rid, self.text_roots)
-            if tokens is not None:
-                tokens = self._clip_tokens(tokens)
-                # We will build the real key_padding_mask in the collate (based on lengths).
-                mask = None
-            item["TXT"] = tokens
-            item["TXT_MASK"] = mask
+        def _attach_meta(d):
+            d["ID"] = rid
+            if self.text_modality != "image":
+                tokens, mask = load_tokens_for_id(
+                    self.text_modality, rid, self.text_roots
+                )
+                if tokens is not None:
+                    tokens = self._clip_tokens(tokens)
+                    mask = None
+                d["TXT"] = tokens
+                d["TXT_MASK"] = mask
+            return d
+
+        if isinstance(out, list):
+            return [_attach_meta(d) for d in out]
         else:
-            item["TXT"] = None
-            item["TXT_MASK"] = None
-
-        return item
+            return _attach_meta(out)

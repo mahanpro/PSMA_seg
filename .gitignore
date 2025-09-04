@@ -44,6 +44,10 @@ train.py
 meow.py
 test.py
 
+ckpt
+nifti_output_anonymized
+nifti_output_mask_anonymized
+runs
 Yazdan_files
 cache
 cache2
