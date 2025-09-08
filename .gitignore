@@ -44,6 +44,7 @@ train.py
 meow.py
 test.py
 
+inference_radgraph.sh
 ckpt
 nifti_output_anonymized
 nifti_output_mask_anonymized
@@ -53,6 +54,7 @@ cache
 cache2
 cache3
 cache_gpt
+cache_gpt_raw
 cache_radgraph
 cache_msraw
 radgraph_embed_old.py
