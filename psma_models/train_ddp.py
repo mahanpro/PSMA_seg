@@ -6,12 +6,17 @@ torchrun --nproc_per_node=1 train_ddp.py \
   --manifest data/dataset.csv \
   --fold 0 \
   --init-ckpt /weights/segresnet_fold0.pth \
-  --text-modality image|radgraph|gpt|msraw \
+  --text-modality image|radgraph|gpt|gpt_raw|msraw \
   --radgraph-root cache/text \
   --gpt-root      cache/text \
   --msraw-root    cache/text_msraw \
   --outdir runs/exp1_image_only \
-  --epochs 300 --patch 128 --infer_patch 192 --lr 2e-4 --bs 2
+  --epochs 300 
+  --patch 128 
+  --infer_patch 192 
+  --lr 2e-4 
+  --bs 2
+  --amp
 """
 
 import argparse, os
@@ -32,7 +37,7 @@ from typing import List, cast
 from data.petct_dataset import PSMAJSONDataset, make_transforms
 import pandas as pd
 import matplotlib.pyplot as plt
-import monai
+from monai.losses.dice import DiceFocalLoss
 from monai.losses.dice import DiceCELoss
 from models.segresnet_text import SegResNetText
 
@@ -151,11 +156,12 @@ def main():
     ap.add_argument("--fold", type=int, default=0)
     ap.add_argument(
         "--text-modality",
-        choices=["image", "radgraph", "gpt", "msraw"],
+        choices=["image", "radgraph", "gpt", "gpt_raw", "msraw"],
         default="image",
     )
     ap.add_argument("--radgraph-root", default="")
     ap.add_argument("--gpt-root", default="")
+    ap.add_argument("--gpt-raw-root", default="")
     ap.add_argument("--msraw-root", default="")
     ap.add_argument("--outdir", required=True)
     ap.add_argument("--epochs", type=int, default=300)
@@ -168,7 +174,7 @@ def main():
     ap.add_argument("--num_workers", type=int, default=4)
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--wd", type=float, default=1e-5)
-    ap.add_argument("--max_tokens", type=int, default=256)
+    ap.add_argument("--max_tokens", type=int, default=2048)
 
     # new
     ap.add_argument(
@@ -177,7 +183,7 @@ def main():
         choices=["segresnet"],
     )
     ap.add_argument("--init-ckpt", default="", help="Optional init checkpoint.")
-    ap.add_argument("--amp", action="store_true", default=True)
+    ap.add_argument("--amp", action="store_true", help="Enable autocast (FP16)")
 
     args = ap.parse_args()
 
@@ -224,6 +230,7 @@ def main():
     text_roots = {
         "radgraph": _P(args.radgraph_root) if args.radgraph_root else _P("."),
         "gpt": _P(args.gpt_root) if args.gpt_root else _P("."),
+        "gpt_raw": _P(args.gpt_raw_root) if args.gpt_raw_root else _P("."),
         "msraw": _P(args.msraw_root) if args.msraw_root else _P("."),
     }
 
@@ -307,6 +314,14 @@ def main():
     post_pred = Compose([AsDiscrete(argmax=True, to_onehot=2)])
     post_lab = Compose([AsDiscrete(to_onehot=2)])
     loss_fn = DiceCELoss(to_onehot_y=True, softmax=True, lambda_dice=1.0, lambda_ce=0.2)
+    # loss_fn = DiceFocalLoss(
+    #     to_onehot_y=True,
+    #     softmax=True,
+    #     include_background=False,
+    #     lambda_dice=1.0,
+    #     lambda_focal=0.5,  # tweak 0.25–1.0 as you like
+    #     gamma=2.0,  # standard focal gamma
+    # )
 
     # logs
     tr_losses, va_losses, va_dices, ep_nums = [], [], [], []

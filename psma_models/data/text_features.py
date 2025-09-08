@@ -20,7 +20,13 @@ def _load_index_lines(p: Path):
                 yield json.loads(line)
 
 
+_LUT_CACHE = {}
+
+
 def build_lookup(index_path: Path) -> Dict[str, Dict[str, str]]:
+    p = str(index_path.resolve())
+    if p in _LUT_CACHE:
+        return _LUT_CACHE[p]
     lut = {}
     for row in _load_index_lines(index_path):
         rid = str(row.get("id"))
@@ -30,6 +36,7 @@ def build_lookup(index_path: Path) -> Dict[str, Dict[str, str]]:
             "hidden_dim": row.get("hidden_dim", 0),
             "num_entities": row.get("num_entities", 0),
         }
+    _LUT_CACHE[p] = lut
     return lut
 
 
@@ -48,7 +55,7 @@ def load_tokens_for_id(
 
     if modality == "radgraph":
         idx = build_lookup(roots["radgraph"] / "index.jsonl")
-        rec = idx.get(rid)
+        rec = idx.get(f"{int(rid):04d}")
         if not rec:
             return None, None
         pt = torch.load(rec["entities_pt"], map_location="cpu")
@@ -57,27 +64,44 @@ def load_tokens_for_id(
 
     if modality == "gpt":
         idx = build_lookup(roots["gpt"] / "index_gpt.jsonl")
-        rec = idx.get(rid)
+        rec = idx.get(f"{int(rid):04d}")
         if not rec:
             return None, None
         pt = torch.load(rec["entities_pt"], map_location="cpu")
         E = pt["embeddings"]
         return E.float(), None
 
+    if modality == "gpt_raw":
+        # index_gpt_raw.jsonl lives under the gpt_raw root
+        idx = build_lookup(roots["gpt_raw"] / "index_gpt_raw.jsonl")
+        rec = idx.get(str(rid)) or idx.get(f"{int(rid):04d}")
+        if not rec:
+            return None, None
+        pt = torch.load(rec["entities_pt"], map_location="cpu")
+        E = pt.get("embeddings")  # (L, H)
+        if E is None:
+            return None, None
+        return E.float(), None
+
     if modality == "msraw":
-        # accept either new or old filename
         idx_path = _first_existing(
             roots["msraw"] / "msraw_index.jsonl",
-            roots["msraw"] / "index_msraw.jsonl",
         )
         if not idx_path:
             return None, None
         idx = build_lookup(idx_path)
-        rec = idx.get(rid)
+        rec = idx.get(str(rid)) or idx.get(f"{int(rid):04d}")
         if not rec:
             return None, None
-        pt = torch.load(rec["entities_pt"], map_location="cpu")
-        E = pt["embeddings"]  # (L, H)
-        return E.float(), None
+        pack = torch.load(rec["entities_pt"], map_location="cpu")
+        # builder saves token-level embeddings + mask
+        tokens = pack.get("tokens")  # (L, Ct)
+        mask = pack.get("mask")  # (L,)
+        if tokens is None:
+            return None, None
+        tokens = tokens.float()
+        if mask is not None:
+            mask = mask.bool()
+        return tokens, mask
 
     raise ValueError(f"Unknown text modality: {modality}")

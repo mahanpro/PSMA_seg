@@ -1,0 +1,1 @@
+python ./psma_models/infer_and_metrics.py --manifest ./psma_models/data/dataset.csv --fold 0 --text-modality radgraph --ckpt ./runs/radgraph/best.pt --radgraph-root ./cache_radgraph --outdir ./runs/radgraph --amp --scores_csv --split test --save_heatmaps

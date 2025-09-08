@@ -1,0 +1,1 @@
+OMP_NUM_THREADS=1 torchrun --standalone --nproc_per_node=2 ./psma_models/train_ddp.py --manifest ./psma_models/data/dataset.csv --radgraph-root ./cache_radgraph --fold 0 --init-ckpt ./ckpt/f0_model_ep=0740.pth --text-modality radgraph --outdir ./runs/radgraph/ --epochs 300 --patch 128 --infer_patch 192 --max_tokens 2048 --lr 2e-4 --bs 2 --amp

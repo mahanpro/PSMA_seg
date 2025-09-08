@@ -84,7 +84,8 @@ class SegResNetText(nn.Module):
         txt_dim: int = 768,
         use_text: bool = False,
         n_heads: int = 4,
-        attn_dropout: float = 0.0,
+        attn_dropout: float = 0.1,
+        fuse_fullres: bool = False,
     ):
         super().__init__()
         C = init_filters
@@ -133,8 +134,10 @@ class SegResNetText(nn.Module):
             self.fuse2 = CrossAttention3D(
                 C * 2, txt_dim, nhead=n_heads, dropout=attn_dropout
             )
-            self.fuse1 = CrossAttention3D(
-                C, txt_dim, nhead=n_heads, dropout=attn_dropout
+            self.fuse1 = (
+                CrossAttention3D(C, txt_dim, nhead=n_heads, dropout=attn_dropout)
+                if fuse_fullres
+                else None
             )
         else:
             self.fuse4 = self.fuse3 = self.fuse2 = self.fuse1 = None
@@ -157,23 +160,29 @@ class SegResNetText(nn.Module):
         b = self.bottom(s4)  # 16C
 
         # Decoder + optional cross-attn
-        d4 = self.dec4(self.up4(b, s4))  # 8C
+        attn_out = None
+
+        d4 = self.dec4(self.up4(b, s4))
         if self.use_text and self.fuse4 is not None:
-            d4, _ = self.fuse4(d4, txt_tokens, txt_mask, return_attn=return_attn)
+            d4, a4 = self.fuse4(d4, txt_tokens, txt_mask, return_attn=return_attn)
+            if return_attn:
+                attn_out = a4
 
-        d3 = self.dec3(self.up3(d4, s3))  # 4C
+        d3 = self.dec3(self.up3(d4, s3))
         if self.use_text and self.fuse3 is not None:
-            d3, _ = self.fuse3(d3, txt_tokens, txt_mask, return_attn=return_attn)
+            d3, a3 = self.fuse3(d3, txt_tokens, txt_mask, return_attn=return_attn)
+            if return_attn:
+                attn_out = a3
 
-        d2 = self.dec2(self.up2(d3, s2))  # 2C
+        d2 = self.dec2(self.up2(d3, s2))
         if self.use_text and self.fuse2 is not None:
-            d2, _ = self.fuse2(d2, txt_tokens, txt_mask, return_attn=return_attn)
+            d2, a2 = self.fuse2(d2, txt_tokens, txt_mask, return_attn=return_attn)
+            if return_attn:
+                attn_out = a2
 
-        d1 = self.dec1(self.up1(d2, s1))  # C
+        d1 = self.dec1(self.up1(d2, s1))
         if self.use_text and self.fuse1 is not None:
-            d1, attn = self.fuse1(d1, txt_tokens, txt_mask, return_attn=return_attn)
-        else:
-            attn = None
+            d1, attn_out = self.fuse1(d1, txt_tokens, txt_mask, return_attn=return_attn)
 
         logits = self.head(d1)
-        return logits, attn
+        return logits, attn_out

@@ -1,0 +1,1 @@
+python ./psma_models/infer_and_metrics.py --manifest ./psma_models/data/dataset.csv --fold 0 --text-modality gpt --ckpt ./runs/gpt/best.pt --gpt-root ./cache_gpt --outdir ./runs/gpt --amp --scores_csv --split test --save_heatmaps

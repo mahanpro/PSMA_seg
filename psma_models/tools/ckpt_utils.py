@@ -55,6 +55,44 @@ def load_init_ckpt(model: torch.nn.Module, ckpt_path: str, verbose=True):
             print(f"[init-load] {len(missing)} missing (kept init), e.g. {missing[:6]}")
 
 
+def load_trained_ckpt(
+    model: torch.nn.Module,
+    ckpt_path: str,
+    strict: bool = True,
+    verbose: bool = True,
+):
+    """
+    Load a *trained* checkpoint saved by train_ddp.save_ckpt(...) into `model`.
+    - Accepts a checkpoint dict with 'model' (preferred) or 'state_dict'.
+    - Strips 'module.' prefixes (DDP).
+    - Does NOT unwrap '.net' (use a wrapper if your keys include 'net.').
+    """
+    if not ckpt_path:
+        raise ValueError("ckpt_path is empty.")
+
+    sd = torch.load(ckpt_path, map_location="cpu")
+    if isinstance(sd, dict):
+        if "model" in sd and isinstance(sd["model"], dict):
+            sd = sd["model"]
+        elif "state_dict" in sd and isinstance(sd["state_dict"], dict):
+            sd = sd["state_dict"]
+
+    # strip DDP prefix
+    sd = {k.replace("module.", ""): v for k, v in sd.items()}
+
+    msg = model.load_state_dict(sd, strict=strict)
+
+    if verbose:
+        mk = getattr(msg, "missing_keys", [])
+        uk = getattr(msg, "unexpected_keys", [])
+        print(f"[load-trained] missing={len(mk)} unexpected={len(uk)}")
+        if mk[:5]:
+            print("  missing (first 5):", mk[:5])
+        if uk[:5]:
+            print("  unexpected (first 5):", uk[:5])
+    return msg
+
+
 def port_monai_to_segresnet_text(
     model_text: torch.nn.Module, monai_state: dict, verbose=True
 ):

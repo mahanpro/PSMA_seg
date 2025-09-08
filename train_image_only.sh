@@ -1,1 +1,0 @@
-OMP_NUM_THREADS=1 torchrun --standalone --nproc_per_node=2 ./psma_models/train_ddp.py --manifest ./psma_models/data/dataset.csv --fold 0 --init-ckpt ./ckpt/f0_model_ep=0740.pth --text-modality image --outdir ./runs/exp_image_only/ --epochs 300 --patch 128 --infer_patch 192 --lr 2e-4 --bs 2

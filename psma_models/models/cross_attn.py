@@ -40,7 +40,12 @@ class CrossAttention3D(nn.Module):
 
         # PyTorch expects key_padding_mask with True==PAD (to be ignored)
         out, attn = self.attn(
-            q, k, v, key_padding_mask=txt_mask
+            q,
+            k,
+            v,
+            key_padding_mask=txt_mask,
+            need_weights=return_attn,
+            average_attn_weights=False,
         )  # out: (B, N, C); attn: (B, N, L)
         out = out.transpose(1, 2).view(B, C, D, H, W)
         out = self.out(out)

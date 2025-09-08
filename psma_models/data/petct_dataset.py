@@ -4,7 +4,6 @@ from monai.transforms.compose import Compose
 from monai.transforms.io.dictionary import LoadImaged
 from monai.transforms.utility.dictionary import EnsureChannelFirstd, EnsureTyped
 from monai.transforms.intensity.dictionary import ScaleIntensityRanged
-from monai.transforms.utility.dictionary import ConcatItemsd, DeleteItemsd
 from monai.data.dataset import Dataset
 from .text_features import load_tokens_for_id
 
@@ -25,7 +24,6 @@ from monai.transforms.intensity.dictionary import (
     RandAdjustContrastd,
     RandGaussianNoised,
 )
-from textfusion.transforms import AddTextTokensd
 
 # --------- NEW: no text injection here; dataset class handles text ----------
 
@@ -52,7 +50,11 @@ def make_transforms(
                 scale_range=(0.10, 0.10, 0.10),
             ),
             Rand3DElasticd(
-                keys=keys, sigma_range=(0.0, 1.0), magnitude_range=(0.0, 1.0), prob=0.3
+                keys=keys,
+                mode=("bilinear", "bilinear", "nearest")[: len(keys)],
+                sigma_range=(0.0, 1.0),
+                magnitude_range=(0.0, 1.0),
+                prob=0.3,
             ),
             # light intensity augs per modality
             RandAdjustContrastd(keys=["CT", "PT"], prob=0.3, gamma=(0.7, 1.5)),
@@ -95,7 +97,7 @@ def make_transforms(
                     spatial_size=(patch, patch, patch),
                     pos=3,
                     neg=1,
-                    num_samples=2,  # two patches per image improves stability with bs=1
+                    num_samples=2,
                     image_key="CT",  # either CT or PT is fine for spacing
                     image_threshold=-900,  # ignore air
                     allow_smaller=True,
@@ -144,7 +146,7 @@ class PSMAJSONDataset(Dataset):
     """
 
     def __init__(
-        self, data, transforms, text_modality="image", text_roots=None, max_tokens=512
+        self, data, transforms, text_modality="image", text_roots=None, max_tokens=1024
     ):
         super().__init__(data=data, transform=transforms)
         self.text_modality = text_modality
@@ -157,7 +159,7 @@ class PSMAJSONDataset(Dataset):
         L = tok.shape[0]
         if L <= self.max_tokens:
             return tok
-        head = 128
+        head = 256
         tail = self.max_tokens - head
         return torch.cat([tok[:head], tok[-tail:]], dim=0)
 
