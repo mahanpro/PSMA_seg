@@ -33,7 +33,8 @@ def make_transforms(
     include_mask: bool = True,
     force_orient: bool = False,
     pet_clip: float = 35.0,
-    patch: int | None = None,  # <- optional training patch (see below)
+    patch: int | None = None,
+    keep_ct_for_inverse: bool = False,
 ):
     keys = ["CT", "PT"] + (["GT"] if include_mask else [])
 
@@ -127,8 +128,14 @@ def make_transforms(
     # finally build the 2-channel tensor the model expects
     ops += [
         ConcatItemsd(keys=["CT", "PT"], name="CTPT", dim=0),
-        DeleteItemsd(keys=["CT", "PT"]),
-        EnsureTyped(keys=["CTPT"] + (["GT"] if include_mask else [])),
+        DeleteItemsd(
+            keys=(["PT"] if keep_ct_for_inverse and not train else ["CT", "PT"])
+        ),
+        EnsureTyped(
+            keys=["CTPT"]
+            + (["GT"] if include_mask else [])
+            + (["CT"] if keep_ct_for_inverse and not train else [])
+        ),
     ]
     return Compose(ops)
 

@@ -58,6 +58,7 @@ cache_gpt_raw
 cache_radgraph
 cache_msraw
 radgraph_embed_old.py
+test.ipynb
 *.txt
 *.docx
 *.xlsx

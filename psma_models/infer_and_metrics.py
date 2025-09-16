@@ -28,6 +28,8 @@ from monai.transforms.post.array import AsDiscrete
 from monai.data.utils import decollate_batch
 from data.petct_dataset import PSMAJSONDataset, make_transforms
 from data.text_features import load_tokens_for_id
+from monai.transforms.post.dictionary import Invertd
+from monai.transforms.io.dictionary import SaveImaged
 
 # from models.unet3d_text import UNet3DText
 from typing import Dict, Any, cast
@@ -141,7 +143,11 @@ def main():
         )
 
     t = make_transforms(
-        train=False, include_mask=True, force_orient=False, pet_clip=35.0
+        train=False,
+        include_mask=True,
+        force_orient=False,
+        pet_clip=35.0,
+        keep_ct_for_inverse=True,
     )
     text_roots = {
         "radgraph": Path(args.radgraph_root) if args.radgraph_root else Path("."),
@@ -257,11 +263,12 @@ def main():
 
             yhat_idx = torch.argmax(yhat_oh, dim=0)  # [D,H,W]
             aff = _safe_affine_from_meta(b["CTPT"])
-            save_nifti_like(yhat_idx.cpu().numpy(), pred_dir / f"{rid}.nii.gz", aff)
+            # save_nifti_like(yhat_idx.cpu().numpy(), pred_dir / f"{rid}.nii.gz", aff)
             print(f"{rid}: Dice={d:.4f}")
 
             # ---- attention heatmap at low-res (one extra pass) ----
-            if args.save_heatmaps and txt_batch is not None:
+            heat_map_fullres = None
+            if args.save_heatmaps and b.get("TXT") is not None:
                 with torch.inference_mode(), autocast(
                     "cuda", enabled=(args.amp and device.type == "cuda")
                 ):
@@ -276,7 +283,12 @@ def main():
                         mode="trilinear",
                         align_corners=False,
                     )
-                    logits, attn = model(xs, txt_batch, None, return_attn=True)
+                    logits, attn = model(
+                        xs,
+                        b.get("TXT", None).unsqueeze(0).to(device),
+                        None,
+                        return_attn=True,
+                    )
                     if attn is not None:
                         # attn could be (B, N, L) or (B, H, N, L); reduce to (B, N, L)
                         if attn.dim() == 4:
@@ -298,7 +310,13 @@ def main():
                                 f"Cannot map attention length N={N} to a grid from (Sd,Sh,Sw)=({Sd},{Sh},{Sw})."
                             )
                         # Sum over all query locations to get token importance (L,)
-                        token_scores = attn[0].sum(dim=0).cpu().numpy()  # (L,)
+                        A = attn.mean(dim=1) if attn.dim() == 4 else attn[0]  # (N,L)
+                        token_scores = (
+                            (A.mean(dim=0) - 1.0 / A.shape[1])
+                            .clamp_min(0)
+                            .cpu()
+                            .numpy()
+                        )
                         tok_dir = base / "attn_tokens"
                         tok_dir.mkdir(parents=True, exist_ok=True)
                         np.save(tok_dir / f"{rid}_token_scores.npy", token_scores)
@@ -309,13 +327,63 @@ def main():
                         attn_up = F.interpolate(
                             vol, size=(D, H, W), mode="trilinear", align_corners=False
                         )
-                        a = attn_up[0, 0].clamp(min=0).cpu().numpy()
-                        bmap = (a - a.min()) / (a.max() + 1e-6)
-                        save_nifti_like(
-                            (bmap * 255).astype(np.uint8),
-                            heat_dir / f"{rid}_attn_sum.nii.gz",
-                            aff,
-                        )
+                        a = attn_up[0, 0].clamp_min(0)
+                        den = (a.max() - a.min()).clamp_min(1e-6)
+                        bmap = (a - a.min()) / den
+                        # bmap = (a - a.min()) / (a.max() + 1e-6)
+                        heat_map_fullres = bmap.cpu()
+            # ---------- invert to full FOV & save ----------
+            # Prepare a small dict for inversion/saving. We kept 'CT' in the sample.
+            data_to_save: Dict[str, Any] = {
+                "CT": b["CT"],
+                "PRED": yhat_idx.unsqueeze(0),
+            }
+            if heat_map_fullres is not None:
+                # keep HEAT as torch tensor [D,H,W] → [1,D,H,W]
+                if isinstance(heat_map_fullres, np.ndarray):
+                    heat_map_fullres = torch.from_numpy(heat_map_fullres)
+                data_to_save["HEAT"] = heat_map_fullres.unsqueeze(0)
+
+            # Invert the eval transforms for PRED/HEAT using CT's history
+            inv_t = Invertd(
+                keys=["PRED"] + (["HEAT"] if "HEAT" in data_to_save else []),
+                transform=t,  # the same transform
+                orig_keys=["CT"] * (1 + (1 if "HEAT" in data_to_save else 0)),
+                nearest_interp=[True]
+                + ([False] if "HEAT" in data_to_save else []),  # label vs heat
+                to_tensor=False,
+            )
+            data_full = inv_t(data_to_save)
+
+            # Save using CT's meta so spacing/origin are exact
+            saver_pred = SaveImaged(
+                keys=["PRED"],
+                output_dir=str(pred_dir),
+                output_postfix="",
+                output_ext=".nii.gz",
+                resample=False,  # already inverted to CT space
+                separate_folder=False,
+                dtype=np.uint8,
+                print_log=False,
+                meta_keys=["CT_meta_dict"],  # write with CT's affine/spacing
+            )
+            data_full = saver_pred(data_full)
+            print(f"{rid}: saved pred → {pred_dir / (rid + '.nii.gz')}")
+
+            if "HEAT" in data_full:
+                saver_heat = SaveImaged(
+                    keys=["HEAT"],
+                    output_dir=str(heat_dir),
+                    output_postfix="attn_sum",
+                    output_ext=".nii.gz",
+                    resample=False,
+                    separate_folder=False,
+                    dtype=np.float32,  # keep float for nicer colormaps
+                    print_log=False,
+                    meta_keys=["CT_meta_dict"],
+                )
+                _ = saver_heat(data_full)
+                print(f"{rid}: saved heat → {heat_dir / (rid + '_attn_sum.nii.gz')}")
 
     mean_d = float(np.mean(dices)) if dices else 0.0
     print(
