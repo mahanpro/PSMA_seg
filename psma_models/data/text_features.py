@@ -1,6 +1,7 @@
 import json, torch
 from pathlib import Path
 from typing import Dict, Tuple, Optional
+import torch.nn.functional as F
 
 """
 Utilities to load per-patient text embeddings for the four ablations:
@@ -10,6 +11,13 @@ Utilities to load per-patient text embeddings for the four ablations:
 - "gpt":      expects index_gpt.jsonl produced by your gpt_embed.py
 - "msraw":    expects msraw_index.jsonl produced by tools/build_msraw_index.py
 """
+
+
+def _sanitize_tokens(E: torch.Tensor) -> torch.Tensor:
+    # Remove NaN/Inf and bound extremes, then L2-normalize per token.
+    E = torch.nan_to_num(E, nan=0.0, posinf=1e4, neginf=-1e4)
+    n = E.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+    return E / n
 
 
 def _load_index_lines(p: Path):
@@ -60,6 +68,7 @@ def load_tokens_for_id(
             return None, None
         pt = torch.load(rec["entities_pt"], map_location="cpu")
         E = pt["embeddings"]
+        E = _sanitize_tokens(E)
         return E.float(), None
 
     if modality == "gpt":
@@ -69,6 +78,7 @@ def load_tokens_for_id(
             return None, None
         pt = torch.load(rec["entities_pt"], map_location="cpu")
         E = pt["embeddings"]
+        E = _sanitize_tokens(E)
         return E.float(), None
 
     if modality == "gpt_raw":
@@ -79,6 +89,7 @@ def load_tokens_for_id(
             return None, None
         pt = torch.load(rec["entities_pt"], map_location="cpu")
         E = pt.get("embeddings")  # (L, H)
+        E = _sanitize_tokens(E)
         if E is None:
             return None, None
         return E.float(), None
@@ -99,6 +110,7 @@ def load_tokens_for_id(
         mask = pack.get("mask")  # (L,)
         if tokens is None:
             return None, None
+        tokens = _sanitize_tokens(tokens)
         tokens = tokens.float()
         if mask is not None:
             mask = mask.bool()

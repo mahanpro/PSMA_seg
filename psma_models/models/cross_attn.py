@@ -24,6 +24,9 @@ class CrossAttention3D(nn.Module):
         # will be filled at forward if return_attn=True
         self._last_attn: Optional[torch.Tensor] = None
 
+        self.txt_ln = nn.LayerNorm(c_txt)
+        self.q_ln = nn.InstanceNorm3d(c_img, affine=True)
+
     def forward(
         self,
         x_img: torch.Tensor,  # (B, C, D, H, W)
@@ -34,20 +37,27 @@ class CrossAttention3D(nn.Module):
         B, C, D, H, W = x_img.shape
         N = D * H * W
 
-        q = self.q_proj(x_img).flatten(2).transpose(1, 2)  # (B, N, C)
-        k = self.k_proj(x_txt)  # (B, L, C)
-        v = self.v_proj(x_txt)  # (B, L, C)
+        # q = self.q_proj(x_img).flatten(2).transpose(1, 2)  # (B, N, C)
+        # k = self.k_proj(x_txt)  # (B, L, C)
+        # v = self.v_proj(x_txt)  # (B, L, C)
 
-        # PyTorch expects key_padding_mask with True==PAD (to be ignored)
-        out, attn = self.attn(
-            q,
-            k,
-            v,
-            key_padding_mask=txt_mask,
-            need_weights=return_attn,
-            average_attn_weights=False,
-        )  # out: (B, N, C); attn: (B, N, L)
-        out = out.transpose(1, 2).view(B, C, D, H, W)
+        x_txt = torch.nan_to_num(x_txt, nan=0.0, posinf=1e4, neginf=-1e4)
+        x_txt = self.txt_ln(x_txt)  # (B, L, Ct) - stable token scale
+        x_img = self.q_ln(x_img)  # (B, C, D, H, W) - tame query scale
+
+        with torch.autocast(device_type=str(x_img.device).split(":")[0], enabled=False):
+            q = self.q_proj(x_img.float()).flatten(2).transpose(1, 2)  # (B,N,C)
+            k = self.k_proj(x_txt.float())  # (B,L,C)
+            v = self.v_proj(x_txt.float())  # (B,L,C)
+            out, attn = self.attn(
+                q,
+                k,
+                v,
+                key_padding_mask=txt_mask,  # True == PAD (ignored)
+                need_weights=return_attn,
+                average_attn_weights=False,
+            )  # out: (B, N, C); attn: (B, N, L)
+        out = out.to(x_img.dtype).transpose(1, 2).view(B, C, D, H, W)
         out = self.out(out)
         out = self.act(self.norm(out + x_img))  # residual
 

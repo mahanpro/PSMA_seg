@@ -1,1 +1,1 @@
-python ./psma_models/infer_and_metrics.py --manifest &MANIFEST_PATH --fold 0 --text-modality image --ckpt ./runs/exp_image_only/best.pt --outdir ./runs/exp_image_only --amp --scores_csv --split test
+python ./psma_models/infer_and_metrics.py --manifest ./psma_models/data/dataset.csv --fold 4 --text-modality image --ckpt ./runs/exp_image_only_fold4/best.pt --outdir ./runs/exp_image_only_fold4 --amp --scores_csv --split test

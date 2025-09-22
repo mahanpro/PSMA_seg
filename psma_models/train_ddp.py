@@ -192,6 +192,11 @@ def main():
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     device = torch.device(f"cuda:{local_rank}")
     torch.cuda.set_device(device)
+    import torch.backends.cuda as cuda_bk
+    import torch.backends.cudnn as cudnn_bk
+
+    cuda_bk.matmul.allow_tf32 = True
+    cudnn_bk.allow_tf32 = True
 
     maybe_set_benchmark(args.patch)
 
