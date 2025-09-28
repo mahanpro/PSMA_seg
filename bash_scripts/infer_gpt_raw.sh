@@ -1,1 +1,1 @@
-python ./psma_models/infer_and_metrics.py --manifest ./psma_models/data/dataset.csv --fold 1 --text-modality gpt_raw --ckpt ./runs/gpt_raw_fold1/best.pt --gpt-raw-root ./cache_gpt_raw --outdir ./runs/gpt_raw_fold1 --amp --scores_csv --split test --save_heatmaps
+python ./psma_models/infer_and_metrics.py --manifest ./psma_models/data/dataset.csv --fold 4 --text-modality gpt_raw --ckpt ./runs/gpt_raw_fold4/last.pt --gpt-raw-root ./cache_gpt_raw --outdir ./runs/gpt_raw_fold4_last --amp --scores_csv --split test --save_heatmaps

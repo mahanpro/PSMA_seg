@@ -51,7 +51,7 @@ def text_list_data_collate(batch: List[Dict[str, Any]]):
             txt_pad[i, :L, :] = t
 
             if m is not None:
-                # Your MS-RAW mask marks VALID tokens as True; invert for key_padding_mask.
+                # MS-RAW mask marks VALID tokens as True; invert for key_padding_mask.
                 vm = m.bool()
                 pad_mask[i, :L] = ~vm
             else:

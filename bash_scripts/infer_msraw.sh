@@ -1,1 +1,1 @@
-python ./psma_models/infer_and_metrics.py --manifest ./psma_models/data/dataset.csv --fold 1 --text-modality msraw --ckpt ./runs/msraw_fold1/best.pt --msraw-root ./cache_msraw --outdir ./runs/msraw_fold1 --amp --scores_csv --split test --save_heatmaps
+python ./psma_models/infer_and_metrics.py --manifest ./psma_models/data/dataset.csv --fold 4 --text-modality msraw --ckpt ./runs/msraw_fold4/last.pt --msraw-root ./cache_msraw --outdir ./runs/msraw_fold4_last --amp --scores_csv --split test --save_heatmaps
