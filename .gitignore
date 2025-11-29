@@ -57,6 +57,8 @@ cache_gpt
 cache_gpt_raw
 cache_radgraph
 cache_msraw
+stats_outputs
+detection_outputs
 radgraph_embed_old.py
 test.ipynb
 *.txt
